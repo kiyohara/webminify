@@ -1,0 +1,332 @@
+#!/bin/sh
+
+if [ -z "$@" ];then
+  echo "Usage: webminify <target_dir>";
+  exit 1;
+fi
+
+### vars ###
+
+DEBUG=0;
+WORK_DIR="";
+
+### colors ###
+if [ -t 1 ];then
+  # is tty
+
+  ESC="`printf '\033'`";
+
+  BOLD_ON="${ESC}[1m";
+  BOLD_OFF="${ESC}[22m";
+  ITALIC_ON="${ESC}[3m";
+  ITALIC_OFF="${ESC}[23m";
+  UNDER_LINE_ON="${ESC}[4m";
+  UNDER_LINE_OFF="${ESC}[24m";
+
+  COLOR_FG_BLACK="${ESC}[30m";
+  COLOR_FG_RED="${ESC}[31m";
+  COLOR_FG_GREEN="${ESC}[32m";
+  COLOR_FG_YELLOW="${ESC}[33m";
+  COLOR_FG_BLUE="${ESC}[34m";
+  COLOR_FG_MAGENTA="${ESC}[35m";
+  COLOR_FG_CYAN="${ESC}[36m";
+  COLOR_FG_WHITE="${ESC}[37m";
+
+  COLOR_BG_BLACK="${ESC}[40m";
+  COLOR_BG_RED="${ESC}[41m";
+  COLOR_BG_GREEN="${ESC}[42m";
+  COLOR_BG_YELLOW="${ESC}[43m";
+  COLOR_BG_BLUE="${ESC}[44m";
+  COLOR_BG_MAGENTA="${ESC}[45m";
+  COLOR_BG_CYAN="${ESC}[46m";
+  COLOR_BG_WHITE="${ESC}[47m";
+
+  COLOR_RESET="${ESC}[m";
+fi
+
+### util funcs ###
+
+function _is_debug()
+{
+  [ -n "${DEBUG}" -a ${DEBUG} -gt 0 ];
+}
+
+if `_is_debug`;then
+  CMD_DEBUG_ECHO="echo";
+  CMD_ECHO="echo";
+  CMD_MKDIR="echo mkdir";
+  CMD_WHICH="which";
+  CMD_CP="echo cp";
+  CMD_RM="echo rm";
+  CMD_MV="echo mv";
+
+  CMD_HTMLCOMPRESSOR="echo htmlcompressor";
+  CMD_YUICOMPRESSOR="echo yuicompressor";
+else
+  CMD_DEBUG_ECHO="_nop";
+  CMD_ECHO="echo";
+  CMD_MKDIR="mkdir";
+  CMD_WHICH="which";
+  CMD_CP="cp";
+  CMD_RM="rm";
+  CMD_MV="mv";
+
+  CMD_HTMLCOMPRESSOR="htmlcompressor";
+  CMD_YUICOMPRESSOR="yuicompressor";
+fi
+
+function _nop()
+{
+  return; # do nothing
+}
+
+function _create_tmp()
+{
+  if `_is_debug`;then
+    WORK_DIR="/tmp/web_minify.XXXXXX";
+  else
+    WORK_DIR=`mktemp -d /tmp/web_minify.XXXXXX`;
+  fi
+}
+
+function _remove_tmp()
+{
+  if `_is_debug`;then
+    return; # do nothing
+  else
+    if [ -d "${WORK_DIR}" ];then
+      ${CMD_RM} -r "${WORK_DIR}";
+      WORK_DIR="";
+    fi
+  fi
+}
+
+function _get_uniq_path()
+{
+  if [ -z "${1}" ];then
+    return;
+  fi
+
+  if [ ! -e "${1}" ];then
+    printf "%s" "${1}";
+  else
+    local i=1;
+    while [ -e "${1}.${i}" ];do
+      i=`expr ${i} + 1`;
+    done
+    printf "%s" "${1}.${i}";
+  fi
+}
+
+function _get_output_dir_name()
+{
+  local base_name="${1:-'web_minify'}";
+  local ext="${2:-''}";
+  local target_dir="${base_name}${ext}";
+
+  _get_uniq_path "${target_dir}";
+}
+
+function _get_output_file_name()
+{
+  local base_name="${1:-'web_minify.out'}";
+  local ext=${2:-''};
+  local target_file="";
+  if [ -n "${ext}" ];then
+    target_file="${base_name%.*}${ext}.${base_name##*.}";
+  else
+    target_file="${base_name}";
+  fi
+
+  _get_uniq_path "${target_file}";
+}
+
+### minify commands ###
+
+# htmlcompressor #
+
+HAS_HTMLCOMPRESSOR="";
+function _has_htmlcomressor()
+{
+  if [ -z "${HAS_HTMLCOMPRESSOR}" ];then
+    HAS_HTMLCOMPRESSOR=`${CMD_WHICH} -s htmlcompressor`;
+  fi
+  return ${HAS_HTMLCOMPRESSOR};
+}
+
+function _htmlcompressor()
+{
+  if [ -n "${1}" -a -n "${2}" ];then
+    # ${CMD_HTMLCOMPRESSOR} -o "${2}" --compress-js --compress-css "${1}";
+    # -> htmlcompressor has path handling bug with space (e.g. a\ b.html)
+
+    if `_is_debug`;then
+      ${CMD_HTMLCOMPRESSOR} -o "${2}" "${1}";
+    else
+      local tmp_file=`mktemp /tmp/web_minify_html.XXXXXX`;
+      ${CMD_HTMLCOMPRESSOR} "${1}" > "${tmp_file}";
+      mv "${tmp_file}" "${2}";
+    fi
+  fi
+}
+
+# yuicompressor #
+
+HAS_YUICOMPRESSOR="";
+function _has_yuicompressor()
+{
+  if [ -z "${HAS_YUICOMPRESSOR}" ];then
+    HAS_YUICOMPRESSOR=`${CMD_WHICH} -s yuicompressor`;
+  fi
+  return ${HAS_YUICOMPRESSOR};
+}
+
+function _yuicompressor_js()
+{
+  if [ -n "${1}" -a -n "${2}" ];then
+    ${CMD_YUICOMPRESSOR} -o "${2}" --type js "${1}";
+  fi
+}
+
+function _yuicompressor_css()
+{
+  if [ -n "${1}" -a -n "${2}" ];then
+    ${CMD_YUICOMPRESSOR} -o "${2}" --type css "${1}";
+  fi
+}
+
+### minify funcs ###
+
+function _do_minify_html()
+{
+  local src="${1}";
+  local dist="${2}";
+  if `_has_htmlcomressor`;then
+    ${CMD_ECHO} "${src} ${COLOR_FG_GREEN}(minify html : htmlcompressor)${COLOR_RESET}";
+    _htmlcompressor "${src}" "${dist}";
+  else
+    _do_copy "${src}" "${dist}";
+  fi
+}
+
+function _do_minify_js()
+{
+  local src="${1}";
+  local dist="${2}";
+  if `_has_yuicompressor`;then
+    ${CMD_ECHO} "${src} ${COLOR_FG_GREEN}(minify js : yuicompressor)${COLOR_RESET}";
+    _yuicompressor_js "${src}" "${dist}";
+  else
+    _do_copy "${src}" "${dist}";
+  fi
+}
+
+function _do_minify_css()
+{
+  local src="${1}";
+  local dist="${2}";
+  if `_has_yuicompressor`;then
+    ${CMD_ECHO} "${src} ${COLOR_FG_GREEN}(minify css : yuicompressor)${COLOR_RESET}";
+    _yuicompressor_css "${src}" "${dist}";
+  else
+    _do_copy "${src}" "${dist}";
+  fi
+}
+
+function _do_copy()
+{
+  local src="${1}";
+  local dist="${2}";
+  ${CMD_ECHO} "${src} ${COLOR_FG_BLUE}(copy)${COLOR_RESET}";
+  ${CMD_CP} "${src}" "${dist}";
+}
+
+function _do_minify()
+{
+  local ext=${1##*.};
+  case x${ext} in
+    x[Hh][Tt][Mm][Ll]|x[Hh][Tt][Mm])
+      _do_minify_html "${1}" "${2}";
+      ;;
+    x[Jj][Ss])
+      _do_minify_js "${1}" "${2}";
+      ;;
+    x[Cc][Ss][Ss])
+      _do_minify_css "${1}" "${2}";
+      ;;
+    *)
+      _do_copy "${1}" "${2}";
+      ;;
+  esac
+}
+
+function _minify_dir()
+{
+  local src_dir="${1}";
+  src_dir="`dirname "${src_dir}"`/`basename "${src_dir}"`";
+  ${CMD_DEBUG_ECHO} "minify dir : ${src_dir}";
+
+  _create_tmp;
+  local work_dir="${WORK_DIR}";
+
+  find "${src_dir}" | while read i;do
+    local path="`echo "$i" | sed 's/ /\\ /g'`";
+
+    if [ -d "${path}" ];then
+      ${CMD_MKDIR} "${work_dir}/${path}";
+    else
+      local work_file="${work_dir}/${path}";
+
+      _do_minify "${path}" "${work_file}";
+    fi
+  done
+
+  local dist_dir=`_get_output_dir_name "${src_dir}" "_minify"`;
+  ${CMD_MV} "${work_dir}/${src_dir##/}" "${dist_dir}";
+
+  _remove_tmp;
+}
+
+function _minify_file()
+{
+  local src_file="$1";
+  ${CMD_DEBUG_ECHO} "minify file : ${src_file}";
+
+  _create_tmp;
+  local work_file="${WORK_DIR}/${src_file}";
+
+  _do_minify "${src_file}" "${work_file}";
+
+  local dist_file=`_get_output_file_name "${src_file}" "_minify"`;
+  ${CMD_MV} "${work_file}" "${dist_file}";
+
+  _remove_tmp;
+}
+
+### main ###
+
+if `_is_debug`;then
+  echo "${COLOR_FG_MAGENTA}*** DEBUG MODE ***${COLOR_RESET}";
+fi
+
+if ! `_has_htmlcomressor`;then
+  echo "${COLOR_FG_RED}*** WARN : Command \"htmlcompressor\" not found ***${COLOR_RESET}";
+fi
+
+if ! `_has_yuicompressor`;then
+  echo "${COLOR_FG_RED}*** WARN : Command \"yuicompressor\" not found ***${COLOR_RESET}";
+fi
+
+for i in $@;do
+  if [ -d "${i}" ];then
+    # directory
+    _minify_dir "${i}"
+  elif [ -f "${i}" ];then
+    # file
+    _minify_file "${i}"
+  else
+    # XXX
+    ${CMD_DEBUG_ECHO} "${COLOR_FG_RED}*** WARN : ${i} ***${COLOR_RESET}"
+  fi
+done
+
